@@ -33,6 +33,7 @@
 	BOOL hasAudio;
 	BOOL loadedFirstFrame;
     BOOL loading;
+    BOOL errorLoading;
 	NSArray* frameTimeValues;
 	NSCondition* synchronousSeekLock;
 }
@@ -49,6 +50,7 @@
 
 
 @property (nonatomic, readwrite) BOOL loading;
+@property (nonatomic, readwrite) BOOL errorLoading;
 
 @property (nonatomic, readwrite) float rate;
 @property (nonatomic, readwrite) float volume;
@@ -69,6 +71,8 @@
 - (BOOL)prepareForLoadAsync;
 - (BOOL)loadMovie:(NSString *)moviePath pathIsURL:(BOOL)isURL allowTexture:(BOOL)useTexture allowPixels:(BOOL)usePixels allowAlpha:(BOOL)useAlpha;
 - (BOOL)loadMovieAsync:(NSString *)moviePath pathIsURL:(BOOL)isURL allowTexture:(BOOL)useTexture allowPixels:(BOOL)usePixels allowAlpha:(BOOL)useAlpha;
+
+- (BOOL)initPixelsAndTexturesForMovie:(QTMovie *)movie;
 - (BOOL)isLoaded;
 - (BOOL)update;
 

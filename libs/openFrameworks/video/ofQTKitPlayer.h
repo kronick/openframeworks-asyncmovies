@@ -110,6 +110,7 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
 		bool                isLoaded();
         bool                isLoading();
 		bool                isPlaying();
+        bool                errorLoading();
 
 
 		void                firstFrame();
@@ -132,6 +133,8 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
         string moviePath;
 		
         bool bSynchronousSeek;
+    
+        bool bInitialized;
 		
         // updateTexture() pulls texture data from the movie QTKit
         // renderer into our internal ofTexture.

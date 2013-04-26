@@ -49,6 +49,7 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 @synthesize justSetFrame;
 @synthesize synchronousSeek;
 @synthesize loading;
+@synthesize errorLoading;
 
 - (NSDictionary*) pixelBufferAttributes
 {
@@ -219,6 +220,7 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     if (!isURL && ![[NSFileManager defaultManager] fileExistsAtPath:moviePath])
     {
 		NSLog(@"No movie file found at %@", moviePath);
+        errorLoading = YES;
 		return NO;
 	}
 	
@@ -248,7 +250,8 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 	
     if(error || _movie == NULL){
         NSLog(@"Error Loading Movie: %@", error);
-        //return NO;
+        errorLoading = YES;
+        return NO;
     }
     
     lastMovieTime = QTMakeTime(0,1);
@@ -295,8 +298,12 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     //if we are using pixels, make the visual context
     //a pixel buffer context with ARGB textures
     
-    DetachMovieFromCurrentThread([_movie quickTimeMovie]);
-    ExitMoviesOnThread();
+    errorLoading = NO;
+    
+    //DetachMovieFromCurrentThread([_movie quickTimeMovie]);
+    //ExitMoviesOnThread();
+    [_movie detachFromCurrentThread];
+    //[QTMovie ExitMoviesOnThread];
     
     dispatch_async(dispatch_get_main_queue(), ^{
         //NSLog(@"!!!!!!!!!!!!!!!!!! BACK ON THE MAIN THREAD !!!!!!!!!!!!!!!!!!!!!!!");
@@ -307,63 +314,9 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
         [QTMovie enterQTKitOnThread];
         [_movie attachToCurrentThread];
         
-
-
-        
-        if(self.usePixels){
+        BOOL success = [self initPixelsAndTexturesForMovie:_movie];
+        errorLoading = !success;
             
-            NSMutableDictionary *ctxAttributes = [NSMutableDictionary dictionaryWithObject:[self pixelBufferAttributes]
-                                                                                    forKey:(NSString*)kQTVisualContextPixelBufferAttributesKey];
-            
-            OSStatus err = QTPixelBufferContextCreate(kCFAllocatorDefault, (CFDictionaryRef)ctxAttributes, &_visualContext);
-            if(err){
-                NSLog(@"error %ld creating OpenPixelBufferContext", err);
-                //return NO;
-            }
-            
-            // if we also have a texture, create a texture cache for it
-            if(self.useTexture){
-                //create a texture cache
-                err = CVOpenGLTextureCacheCreate(kCFAllocatorDefault, NULL,
-                                                 CGLGetCurrentContext(), CGLGetPixelFormat(CGLGetCurrentContext()),
-                                                 (CFDictionaryRef)ctxAttributes, &_textureCache);
-                if(err){
-                    NSLog(@"error %ld creating CVOpenGLTextureCacheCreate", err);
-                    //return NO;
-                }
-            }
-        }
-        //if we are using a texture, just create an OpenGL visual context
-        else if(self.useTexture){
-            OSStatus err = QTOpenGLTextureContextCreate(kCFAllocatorDefault,
-                                                        CGLGetCurrentContext(), CGLGetPixelFormat(CGLGetCurrentContext()),
-                                                        (CFDictionaryRef)NULL, &_visualContext);
-            if(err){
-                NSLog(@"error %ld creating QTOpenGLTextureContextCreate", err);
-                //return NO;
-            }
-        }
-        else {
-            NSLog(@"Error - QTKitMovieRenderer - Must specify either Pixels or Texture as rendering strategy");
-            //return NO;
-        }
-        
-        [_movie setVisualContext:_visualContext];
-        //SetMovieVisualContext([_movie quickTimeMovie], _visualContext);
-        
-        QTVisualContextSetImageAvailableCallback(_visualContext, frameAvailable, self);
-        synchronousSeekLock = [[NSCondition alloc] init];
-        
-        //borrowed from WebCore:
-        // http://opensource.apple.com/source/WebCore/WebCore-1298/platform/graphics/win/QTMovie.cpp
-        hasVideo = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, VisualMediaCharacteristic, movieTrackCharacteristic | movieTrackEnabledOnly));
-        hasAudio = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, AudioMediaCharacteristic,  movieTrackCharacteristic | movieTrackEnabledOnly));
-        //	NSLog(@"has video? %@ has audio? %@", (hasVideo ? @"YES" : @"NO"), (hasAudio ? @"YES" : @"NO") );
-        loadedFirstFrame = NO;
-        self.volume = 1.0;
-        self.loops = YES;
-        self.palindrome = NO;
-        
         self.loading = NO;
         
         [pool release];
@@ -376,9 +329,69 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 	return YES;
 }
 
+- (BOOL) initPixelsAndTexturesForMovie:(QTMovie *)movie
+{
+    if(self.usePixels){
+        
+        NSMutableDictionary *ctxAttributes = [NSMutableDictionary dictionaryWithObject:[self pixelBufferAttributes]
+                                                                                forKey:(NSString*)kQTVisualContextPixelBufferAttributesKey];
+        
+        OSStatus err = QTPixelBufferContextCreate(kCFAllocatorDefault, (CFDictionaryRef)ctxAttributes, &_visualContext);
+        if(err){
+            NSLog(@"error %ld creating OpenPixelBufferContext", err);
+            return NO;
+        }
+        
+        // if we also have a texture, create a texture cache for it
+        if(self.useTexture){
+            //create a texture cache
+            err = CVOpenGLTextureCacheCreate(kCFAllocatorDefault, NULL,
+                                             CGLGetCurrentContext(), CGLGetPixelFormat(CGLGetCurrentContext()),
+                                             (CFDictionaryRef)ctxAttributes, &_textureCache);
+            if(err){
+                NSLog(@"error %ld creating CVOpenGLTextureCacheCreate", err);
+                return NO;
+            }
+        }
+    }
+    //if we are using a texture, just create an OpenGL visual context
+    else if(self.useTexture){
+        OSStatus err = QTOpenGLTextureContextCreate(kCFAllocatorDefault,
+                                                    CGLGetCurrentContext(), CGLGetPixelFormat(CGLGetCurrentContext()),
+                                                    (CFDictionaryRef)NULL, &_visualContext);
+        if(err){
+            NSLog(@"error %ld creating QTOpenGLTextureContextCreate", err);
+            return NO;
+        }
+    }
+    else {
+        NSLog(@"Error - QTKitMovieRenderer - Must specify either Pixels or Texture as rendering strategy");
+        return NO;
+    }
+    
+    [_movie setVisualContext:_visualContext];
+    //SetMovieVisualContext([_movie quickTimeMovie], _visualContext);
+    
+    QTVisualContextSetImageAvailableCallback(_visualContext, frameAvailable, self);
+    synchronousSeekLock = [[NSCondition alloc] init];
+    
+    //borrowed from WebCore:
+    // http://opensource.apple.com/source/WebCore/WebCore-1298/platform/graphics/win/QTMovie.cpp
+    hasVideo = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, VisualMediaCharacteristic, movieTrackCharacteristic | movieTrackEnabledOnly));
+    hasAudio = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, AudioMediaCharacteristic,  movieTrackCharacteristic | movieTrackEnabledOnly));
+    //	NSLog(@"has video? %@ has audio? %@", (hasVideo ? @"YES" : @"NO"), (hasAudio ? @"YES" : @"NO") );
+    loadedFirstFrame = NO;
+    self.volume = 1.0;
+    self.loops = YES;
+    self.palindrome = NO;
+    
+    return YES;
+}
+
+
 - (BOOL) isLoaded
 {
-    return !self.loading;
+    return !self.loading && !self.errorLoading;
     //return loadedFirstFrame;
 }
 
@@ -478,7 +491,6 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 		}
 
 		if(self.usePixels){
-            NSLog(@"NEW PIXELS");
 			if(_latestPixelFrame != NULL){
 				CVPixelBufferRelease(_latestPixelFrame);
 				_latestPixelFrame = NULL;
