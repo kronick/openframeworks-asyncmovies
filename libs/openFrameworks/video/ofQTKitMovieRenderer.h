@@ -7,6 +7,13 @@
 #import <QTKit/QTKit.h>
 #import <OpenGL/OpenGL.h>
 
+enum QTKitMovieState
+{
+    QTKitStateLoading = 0,
+    QTKitStateLoaded,
+    QTKitStateReady,
+    QTKitStateError
+};
 
 @interface QTKitMovieRenderer : NSObject
 {
@@ -17,10 +24,14 @@
 	CVOpenGLTextureRef _latestTextureFrame;
 	CVPixelBufferRef _latestPixelFrame;
     
+    enum QTKitMovieState state;
+    NSString * _path;               // Stored in case of synchronous load re-try
+    BOOL _pathIsURL;
+    
 	NSSize movieSize;
 	QTTime movieDuration;
 	NSInteger frameCount;
-//	double frameStep;
+    //	double frameStep;
     QTTime lastMovieTime;
 	BOOL frameUpdated;
 	BOOL useTexture;
@@ -34,6 +45,7 @@
 	BOOL loadedFirstFrame;
     BOOL loading;
     BOOL errorLoading;
+    BOOL settingRate;
 	NSArray* frameTimeValues;
 	NSCondition* synchronousSeekLock;
 }
@@ -48,9 +60,9 @@
 @property (readwrite) BOOL justSetFrame; //this needs to be set *before* calls to _movie.setTime to allow synchronous seeking
 @property (nonatomic, readwrite) BOOL synchronousSeek;
 
+@property (nonatomic, readonly) BOOL settingRate;
 
 @property (nonatomic, readwrite) BOOL loading;
-@property (nonatomic, readwrite) BOOL errorLoading;
 
 @property (nonatomic, readwrite) float rate;
 @property (nonatomic, readwrite) float volume;
@@ -69,12 +81,20 @@
 
 - (void)draw:(NSRect)drawRect;
 - (BOOL)prepareForLoadAsync;
-- (BOOL)loadMovie:(NSString *)moviePath pathIsURL:(BOOL)isURL allowTexture:(BOOL)useTexture allowPixels:(BOOL)usePixels allowAlpha:(BOOL)useAlpha;
+- (BOOL)loadMovie:(NSString *)moviePath synchronously:(BOOL)sync pathIsURL:(BOOL)isURL allowTexture:(BOOL)useTexture allowPixels:(BOOL)usePixels allowAlpha:(BOOL)useAlpha;
 - (BOOL)loadMovieAsync:(NSString *)moviePath pathIsURL:(BOOL)isURL allowTexture:(BOOL)useTexture allowPixels:(BOOL)usePixels allowAlpha:(BOOL)useAlpha;
 
 - (BOOL)initPixelsAndTexturesForMovie:(QTMovie *)movie;
-- (BOOL)isLoaded;
 - (BOOL)update;
+
+- (void)loadStateChanged:(NSNotification *)notification;
+
+- (BOOL)isLoaded;
+- (BOOL)isLoading;
+- (BOOL)errorLoading;
+- (BOOL) isReady;
+- (BOOL) initMovie:(QTMovie *)movie;
+- (BOOL) countFrames:(QTMovie *)movie;
 
 - (void)bindTexture;
 - (void)unbindTexture;

@@ -13,6 +13,8 @@ ofQTKitPlayer::ofQTKitPlayer() {
 	// default this to true so the player update behavior matches ofQuicktimePlayer
 	bSynchronousSeek = true;
     
+    bInitialized = false;
+    
     pixelFormat = OF_PIXELS_RGB;
     currentLoopState = OF_LOOP_NORMAL;
 }
@@ -29,6 +31,10 @@ bool ofQTKitPlayer::loadMovie(string path){
 
 //--------------------------------------------------------------------
 bool ofQTKitPlayer::loadMovie(string movieFilePath, ofQTKitDecodeMode mode) {
+    return loadMovie(movieFilePath, mode, false);
+}
+
+bool ofQTKitPlayer::loadMovie(string movieFilePath, ofQTKitDecodeMode mode, bool async) {
 	if(mode != OF_QTKIT_DECODE_PIXELS_ONLY && mode != OF_QTKIT_DECODE_TEXTURE_ONLY && mode != OF_QTKIT_DECODE_PIXELS_AND_TEXTURE){
 		ofLogError("ofQTKitPlayer") << "Invalid ofQTKitDecodeMode mode specified while loading movie.";
 		return false;
@@ -57,7 +63,10 @@ bool ofQTKitPlayer::loadMovie(string movieFilePath, ofQTKitDecodeMode mode) {
     }
 
 	moviePlayer = [[QTKitMovieRenderer alloc] init];
-	BOOL success = [moviePlayer loadMovie:[NSString stringWithCString:movieFilePath.c_str() encoding:NSUTF8StringEncoding]
+	BOOL success = [moviePlayer  loadMovie:[NSString
+                                            stringWithCString:movieFilePath.c_str()
+                                            encoding:NSUTF8StringEncoding]
+                            synchronously:!async
 								pathIsURL:isURL
 							 allowTexture:useTexture 
 							  allowPixels:usePixels
@@ -66,11 +75,12 @@ bool ofQTKitPlayer::loadMovie(string movieFilePath, ofQTKitDecodeMode mode) {
 		moviePlayer.synchronousSeek = bSynchronousSeek;
         reallocatePixels();
         moviePath = movieFilePath;
-		duration = moviePlayer.duration;
+		//duration = moviePlayer.duration;
 
         setLoopState(currentLoopState);
-        setSpeed(1.0f);
-		firstFrame(); //will load the first frame
+        
+        //setSpeed(1.0f);
+		//firstFrame(); //will load the first frame
 	}
 	else {
 		ofLogError("ofQTKitPlayer") << "Loading file " << movieFilePath << " failed.";
@@ -78,7 +88,7 @@ bool ofQTKitPlayer::loadMovie(string movieFilePath, ofQTKitDecodeMode mode) {
 		moviePlayer = NULL;
 	}
 	
-    bInitialized = true;
+    //bInitialized = true;
     
 	[pool release];
 	
@@ -123,18 +133,20 @@ bool ofQTKitPlayer::loadMovieAsync(string movieFilePath, ofQTKitDecodeMode mode)
 	moviePlayer = [[QTKitMovieRenderer alloc] init];
     
     // SK: Everything below needs to be done async/with a callback
-    NSLog(@"Loading Movie");
+    //NSLog(@"Loading Movie");
     [moviePlayer prepareForLoadAsync];
     
     bInitialized = false;
     
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    //NSLog(@"Starting async movie thread...");
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
 
         BOOL success = [moviePlayer loadMovieAsync:[NSString stringWithCString:movieFilePath.c_str() encoding:NSUTF8StringEncoding]
                                     pathIsURL:isURL
                                  allowTexture:useTexture
                                   allowPixels:usePixels
                                    allowAlpha:useAlpha];
+        
         //if(success) NSLog(@"Movie Loaded");
         /*
         // The following is moved to update() to avoid problems with this c++ object being
@@ -179,7 +191,7 @@ bool ofQTKitPlayer::isLoaded() {
 }
 
 bool ofQTKitPlayer::isLoading() {
-    return [moviePlayer loading];
+    return [moviePlayer isLoading];
 }
 bool ofQTKitPlayer::errorLoading() {
     return [moviePlayer errorLoading];
@@ -282,11 +294,11 @@ void ofQTKitPlayer::setSpeed(float rate){
 void ofQTKitPlayer::play(){
 	if(!isLoaded()) return;
     
-    bPaused = false;
-    
-	NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
-    [moviePlayer setRate:speed];
-	[pool release];
+    if(isPaused()) {
+        NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+        [moviePlayer setRate:speed];
+        [pool release];
+    }
 }
 
 //--------------------------------------------------------------------
@@ -296,36 +308,41 @@ void ofQTKitPlayer::idleMovie() {
 
 //--------------------------------------------------------------------
 void ofQTKitPlayer::update() {
-	if(!isLoaded()) {
-        NSLog(@"Not ready for update....");
+	if(moviePlayer == NULL || [moviePlayer settingRate])
         return;
+
+  	NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+    
+    if(bInitialized) {
+        // SK: Manually loop if the loop state couldn't be set for some reason (async loading)
+        if(currentLoopState == OF_LOOP_NORMAL && currentLoopState != getLoopState() && [moviePlayer frame] >= [moviePlayer frameCount]) {
+            firstFrame();
+        }
+        bNewFrame = [moviePlayer update];
+        if(bNewFrame) {
+            bHavePixelsChanged = true;
+        }
     }
-    else if(!bInitialized) {
+    else if([moviePlayer isReady]) {
         // Run only once after asynchronous loading is complete
-        moviePlayer.synchronousSeek = bSynchronousSeek;
+        //NSLog(@"Reallocating pixels.");
         reallocatePixels();
+        //NSLog(@"Pixels reallocated.");
         duration = moviePlayer.duration;
         
         setLoopState(currentLoopState);
-        setSpeed(1.0f);
+        //setSpeed(1.0f);
         firstFrame(); //will load the first frame
-        /*
-        else {
-            ofLogError("ofQTKitPlayer") << "Loading file " << movieFilePath << " failed.";
-            [moviePlayer release];
-            moviePlayer = NULL;
-        }
-        */
+
+        ofVideoReadyEventArgs readyEvent;
+        readyEvent.player = this;
+        ofNotifyEvent(videoReadyEvent, readyEvent, this);
         
         bInitialized = true;
         
         //NSLog(@"Textures allocated");
     }
-	NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
-	bNewFrame = [moviePlayer update];
-	if (bNewFrame) {
-		bHavePixelsChanged = true;
-	}
+
     [pool release];
 }
 
@@ -452,7 +469,6 @@ void ofQTKitPlayer::setLoopState(ofLoopType state) {
 	if(!isLoaded()) return;
     NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
 
-    NSLog(@"Setting loop state: %i (current: %i)", state, currentLoopState);
     currentLoopState = state;
 
 	if(state == OF_LOOP_NONE){

@@ -30,6 +30,10 @@ enum ofQTKitDecodeMode {
     // managing your own ofTexture.
 };
 
+class ofVideoReadyEventArgs : public ofEventArgs {
+public:
+	ofBaseVideoPlayer* player;
+};
 
 class ofQTKitPlayer  : public ofBaseVideoPlayer {
 	public:
@@ -39,6 +43,7 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
 
 		bool                loadMovie(string path); //default mode is PIXELS_ONLY
 		bool                loadMovie(string path, ofQTKitDecodeMode mode);
+        bool                loadMovie(string path, ofQTKitDecodeMode mode, bool async);
         bool                loadMovieAsync(string path);
         bool                loadMovieAsync(string path, ofQTKitDecodeMode mode);
 
@@ -116,6 +121,8 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
 		void                firstFrame();
 		void                nextFrame();
 		void                previousFrame();
+    
+        ofEvent<ofVideoReadyEventArgs> videoReadyEvent;
 
 	protected:
     
@@ -135,6 +142,7 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
         bool bSynchronousSeek;
     
         bool bInitialized;
+    
 		
         // updateTexture() pulls texture data from the movie QTKit
         // renderer into our internal ofTexture.

@@ -49,7 +49,7 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 @synthesize justSetFrame;
 @synthesize synchronousSeek;
 @synthesize loading;
-@synthesize errorLoading;
+@synthesize settingRate;
 
 - (NSDictionary*) pixelBufferAttributes
 {
@@ -60,15 +60,21 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
             nil];
 }
 
-- (BOOL) loadMovie:(NSString*)moviePath pathIsURL:(BOOL)isURL allowTexture:(BOOL)doUseTexture allowPixels:(BOOL)doUsePixels allowAlpha:(BOOL)doUseAlpha
+- (BOOL) loadMovie:(NSString*)moviePath synchronously:(BOOL)sync pathIsURL:(BOOL)isURL allowTexture:(BOOL)doUseTexture allowPixels:(BOOL)doUsePixels allowAlpha:(BOOL)doUseAlpha
 {
+    // save the vars in case we need to call loadMovie again
+    _path = moviePath;
+    _pathIsURL = isURL;
+    
     // if the path is local, make sure the file exists before proceeding
     if (!isURL && ![[NSFileManager defaultManager] fileExistsAtPath:moviePath])
     {
 		NSLog(@"No movie file found at %@", moviePath);
 		return NO;
 	}
-	
+
+	state = QTKitStateLoading;
+    
 	//create visual context
 	useTexture = doUseTexture;
 	usePixels = doUsePixels;
@@ -85,58 +91,104 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     }
 
 	NSError* error;
-	NSMutableDictionary* movieAttributes = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+    NSMutableDictionary* movieAttributes = [NSMutableDictionary dictionaryWithObject:movieURL
+                                                                              forKey:QTMovieURLAttribute];
+	/*
+    NSMutableDictionary* movieAttributes = [NSMutableDictionary dictionaryWithObjectsAndKeys:
                                             movieURL, QTMovieURLAttribute,
                                             [NSNumber numberWithBool:NO], QTMovieOpenAsyncOKAttribute,
                                             nil];
+    */
+    if(sync) {
+        [movieAttributes setObject:[NSNumber numberWithBool:NO]
+                            forKey:QTMovieOpenAsyncOKAttribute];
+    }
+    else {
+        [movieAttributes setObject:[NSNumber numberWithBool:YES]
+                            forKey:QTMovieOpenAsyncRequiredAttribute];
+    }
 
 	_movie = [[QTMovie alloc] initWithAttributes:movieAttributes 
 										   error: &error];
 	
 	if(error || _movie == NULL){
 		NSLog(@"Error Loading Movie: %@", error);
+        state = QTKitStateError;
 		return NO;
 	}
-    lastMovieTime = QTMakeTime(0,1);
-	movieSize = [[_movie attributeForKey:QTMovieNaturalSizeAttribute] sizeValue];
-    //	NSLog(@"movie size %f %f", movieSize.width, movieSize.height);
-	
-	movieDuration = [_movie duration];
     
-	[_movie gotoBeginning];
+    if(sync) {
+        if([self initMovie:_movie]) {
+            [self countFrames:_movie];
+            state = QTKitStateReady;
+            return YES;
+        }
+        return NO;
+    }
+    else {
+        // Use notification center to set up a load state change callback
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(loadStateChanged:)
+                                                     name:QTMovieLoadStateDidChangeNotification
+                                                   object:_movie];
+        return YES;
+    }
     
-    [_movie gotoEnd];
-    QTTime endTime = [_movie currentTime];
-    
-    [_movie gotoBeginning];
-    QTTime curTime = [_movie currentTime];
-    
-    long numFrames = 0;
-	NSMutableArray* timeValues = [NSMutableArray array];
-    while(true) {
-        //        % get the end time of the current frame
-		[timeValues addObject:[NSNumber numberWithLongLong:curTime.timeValue]];
+}
 
-        curTime = [_movie frameEndTime:curTime];
-        numFrames++;
-//        int time = curTime.timeValue;
-//        NSLog(@" num frames %ld, %lld/%ld , dif %lld, current time %f", numFrames,curTime.timeValue,curTime.timeScale, curTime.timeValue - time, 1.0*curTime.timeValue/curTime.timeScale);
-        if (QTTimeCompare(curTime, endTime) == NSOrderedSame ||
-            QTTimeCompare(curTime, [_movie frameEndTime:curTime])  == NSOrderedSame ){ //this will happen for audio files since they have no frames.
-            break;
+- (void)loadStateChanged:(NSNotification *)notification
+{
+    QTMovie *movie = (QTMovie *)[notification object];
+    if(movie == nil) return;
+    
+    NSInteger loadState = [[movie attributeForKey:QTMovieLoadStateAttribute] longValue];
+    
+    if (loadState == QTMovieLoadStateError) {
+        // an error occurred while loading the movie
+        NSError *error = [movie attributeForKey:
+                          QTMovieLoadStateErrorAttribute];
+        state = QTKitStateError;
+        
+        NSLog(@"Error loading async movie: %@", error);
+        NSLog(@"Trying to load movie synchronously");
+        
+        [self loadMovie:_path
+          synchronously:YES
+              pathIsURL:_pathIsURL
+           allowTexture:useTexture allowPixels:usePixels
+             allowAlpha:useAlpha];
+    }
+    
+    if ((loadState >= QTMovieLoadStateLoaded) && state != QTKitStateLoaded) {
+        if ([self initMovie:movie]) {
+            state = QTKitStateLoaded;
         }
     }
     
-	if(frameTimeValues != NULL){
-		[frameTimeValues release];
-	}
-	frameTimeValues = [[NSArray arrayWithArray:timeValues] retain];
+    if ((loadState >= QTMovieLoadStatePlayable)) {
+    }
+    
+    if ((loadState >= QTMovieLoadStatePlaythroughOK && state != QTKitStateReady)) {
+        if ([self countFrames:movie]) {
+            state = QTKitStateReady;
+        }
+    }
+}
+
+- (BOOL)isReady
+{
+    return (state == QTKitStateReady);
+}
+
+- (BOOL) initMovie:(QTMovie *)movie
+{
+    lastMovieTime = QTMakeTime(0,1);
+	movieSize = [[movie attributeForKey:QTMovieNaturalSizeAttribute] sizeValue];
+    //	NSLog(@"movie size %f %f", movieSize.width, movieSize.height);
 	
-	frameCount = numFrames;
-//	frameStep = round((double)(movieDuration.timeValue/(double)(numFrames)));
-	//NSLog(@" movie has %d frames and frame step %d", frameCount, frameStep);
-	
-	//if we are using pixels, make the visual context
+	movieDuration = [movie duration];
+    
+    //if we are using pixels, make the visual context
 	//a pixel buffer context with ARGB textures
 	if(self.usePixels){
 		
@@ -176,15 +228,17 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 		return NO;
 	}
 	
-	[_movie setVisualContext:_visualContext];
+	[movie setVisualContext:_visualContext];
 	
 	QTVisualContextSetImageAvailableCallback(_visualContext, frameAvailable, self);
 	synchronousSeekLock = [[NSCondition alloc] init];
 	
 	//borrowed from WebCore:
 	// http://opensource.apple.com/source/WebCore/WebCore-1298/platform/graphics/win/QTMovie.cpp
-	hasVideo = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, VisualMediaCharacteristic, movieTrackCharacteristic | movieTrackEnabledOnly));
-	hasAudio = (NULL != GetMovieIndTrackType([_movie quickTimeMovie], 1, AudioMediaCharacteristic,  movieTrackCharacteristic | movieTrackEnabledOnly));
+	hasVideo = (NULL != GetMovieIndTrackType([movie quickTimeMovie], 1, VisualMediaCharacteristic, movieTrackCharacteristic | movieTrackEnabledOnly));
+	hasAudio = (NULL != GetMovieIndTrackType([movie quickTimeMovie], 1, AudioMediaCharacteristic,  movieTrackCharacteristic | movieTrackEnabledOnly));
+    
+    
 //	NSLog(@"has video? %@ has audio? %@", (hasVideo ? @"YES" : @"NO"), (hasAudio ? @"YES" : @"NO") );
 	loadedFirstFrame = NO;
 	self.volume = 1.0;
@@ -194,6 +248,45 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     self.loading = NO;
     
 	return YES;
+}
+
+- (BOOL)countFrames:(QTMovie *)movie
+{
+    [movie gotoEnd];
+    QTTime endTime = [movie currentTime];
+    
+    [movie gotoBeginning];
+    QTTime curTime = [movie currentTime];
+    
+    long numFrames = 0;
+    NSMutableArray* timeValues = [NSMutableArray array];
+    
+    while(true) {
+        //        % get the end time of the current frame
+        [timeValues addObject:[NSNumber numberWithLongLong:curTime.timeValue]];
+        
+        curTime = [_movie frameEndTime:curTime];
+        numFrames++;
+        //        int time = curTime.timeValue;
+        //        NSLog(@" num frames %ld, %lld/%ld , dif %lld, current time %f", numFrames,curTime.timeValue,curTime.timeScale, curTime.timeValue - time, 1.0*curTime.timeValue/curTime.timeScale);
+        if (QTTimeCompare(curTime, endTime) == NSOrderedSame ||
+            QTTimeCompare(curTime, [_movie frameEndTime:curTime])  == NSOrderedSame ){ //this will happen for audio files since they have no frames.
+            break;
+        }
+    }
+    
+    frameCount = numFrames;
+    
+    if(frameTimeValues != NULL){
+        [frameTimeValues release];
+    }
+    frameTimeValues = [[NSArray arrayWithArray:timeValues] retain];
+    //frameStep = 1.0*movieDuration.timeValue/numFrames;
+    
+    [self setFrame:0];
+    
+    
+    return YES;
 }
 
 - (BOOL) prepareForLoadAsync
@@ -216,11 +309,13 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     
+    state = QTKitStateLoading;
+    
     // if the path is local, make sure the file exists before proceeding
     if (!isURL && ![[NSFileManager defaultManager] fileExistsAtPath:moviePath])
     {
 		NSLog(@"No movie file found at %@", moviePath);
-        errorLoading = YES;
+        state = QTKitStateError;
 		return NO;
 	}
 	
@@ -250,7 +345,7 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 	
     if(error || _movie == NULL){
         NSLog(@"Error Loading Movie: %@", error);
-        errorLoading = YES;
+        state = QTKitStateError;
         return NO;
     }
     
@@ -298,15 +393,16 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     //if we are using pixels, make the visual context
     //a pixel buffer context with ARGB textures
     
-    errorLoading = NO;
     
     //DetachMovieFromCurrentThread([_movie quickTimeMovie]);
     //ExitMoviesOnThread();
     [_movie detachFromCurrentThread];
     //[QTMovie ExitMoviesOnThread];
     
+    //NSLog(@"Async loading complete. Going back to main thread...");
     dispatch_async(dispatch_get_main_queue(), ^{
         //NSLog(@"!!!!!!!!!!!!!!!!!! BACK ON THE MAIN THREAD !!!!!!!!!!!!!!!!!!!!!!!");
+        //NSLog(@"Back on the main thread.");
         NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
         
         //EnterMovies();
@@ -315,7 +411,8 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
         [_movie attachToCurrentThread];
         
         BOOL success = [self initPixelsAndTexturesForMovie:_movie];
-        errorLoading = !success;
+        if(success) state = QTKitStateReady;
+        else        state = QTKitStateError;
             
         self.loading = NO;
         
@@ -331,6 +428,7 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 
 - (BOOL) initPixelsAndTexturesForMovie:(QTMovie *)movie
 {
+    //NSLog(@"Initializing pixels and textures.");
     if(self.usePixels){
         
         NSMutableDictionary *ctxAttributes = [NSMutableDictionary dictionaryWithObject:[self pixelBufferAttributes]
@@ -384,21 +482,32 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
     self.volume = 1.0;
     self.loops = YES;
     self.palindrome = NO;
-    
+    //NSLog(@"Pixels and textures initialized.");
     return YES;
 }
 
 
 - (BOOL) isLoaded
 {
-    return !self.loading && !self.errorLoading;
+    return state == QTKitStateReady || state == QTKitStateLoaded;
+    
+    //return !self.loading && !self.errorLoading;
     //return loadedFirstFrame;
 }
-
+- (BOOL) errorLoading
+{
+    return state == QTKitStateError;
+}
+- (BOOL) isLoading
+{
+    return state == QTKitStateLoading;
+}
 
 - (void) dealloc
 {
 	@synchronized(self){
+        
+        [[NSNotificationCenter defaultCenter] removeObserver:self];
 		
 		if(_visualContext != NULL){
 			QTVisualContextSetImageAvailableCallback(_visualContext, NULL, NULL);
@@ -585,7 +694,8 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 {
 	if(_movie){
 		self.justSetFrame = YES;
-    	[_movie gotoBeginning];
+    	//[_movie gotoBeginning];
+        [_movie setCurrentTime:QTMakeTime(0, 1)];
 		[self synchronizeSeek];
     }
 }
@@ -722,7 +832,35 @@ typedef struct OpenGLTextureCoordinates OpenGLTextureCoordinates;
 		[synchronousSeekLock signal];
 		[synchronousSeekLock unlock];
 	}
-	[_movie setRate:rate];
+    
+    //[_movie setRate:rate];
+
+    
+    
+    if(settingRate) return;
+    
+    settingRate = YES;
+    
+    [_movie detachFromCurrentThread];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+
+        //NSLog(@"Asynchronously hitting 'play' for %@", _movie);
+        [QTMovie enterQTKitOnThread];
+        [_movie attachToCurrentThread];
+        
+        [_movie setRate:rate];
+        
+        [_movie detachFromCurrentThread];
+        [QTMovie exitQTKitOnThread];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            //[QTMovie enterQTKitOnThread];
+            [_movie attachToCurrentThread];
+            settingRate = NO;
+        });
+    });
+
+
 }
 
 - (float) rate
