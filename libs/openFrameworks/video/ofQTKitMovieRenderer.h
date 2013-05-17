@@ -46,6 +46,7 @@ enum QTKitMovieState
     BOOL loading;
     BOOL errorLoading;
     BOOL settingRate;
+    BOOL mustLoadSync;
 	NSArray* frameTimeValues;
 	NSCondition* synchronousSeekLock;
 }
@@ -61,6 +62,7 @@ enum QTKitMovieState
 @property (nonatomic, readwrite) BOOL synchronousSeek;
 
 @property (nonatomic, readonly) BOOL settingRate;
+@property (nonatomic, readwrite) BOOL mustLoadSync;
 
 @property (nonatomic, readwrite) BOOL loading;
 

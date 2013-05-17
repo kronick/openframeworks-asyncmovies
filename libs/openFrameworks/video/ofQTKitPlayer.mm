@@ -14,6 +14,7 @@ ofQTKitPlayer::ofQTKitPlayer() {
 	bSynchronousSeek = true;
     
     bInitialized = false;
+    bMustLoadSync = false;  // Flag set to true if error loading the movie asynchronously
     
     pixelFormat = OF_PIXELS_RGB;
     currentLoopState = OF_LOOP_NORMAL;
@@ -102,6 +103,12 @@ bool ofQTKitPlayer::loadMovieAsync(string path){
 
 //--------------------------------------------------------------------
 bool ofQTKitPlayer::loadMovieAsync(string movieFilePath, ofQTKitDecodeMode mode) {
+    if(bMustLoadSync) {
+        // If async loading failed earlier, don't try to load this movie asynchronously again
+        NSLog(@"Actually, imma gonna load this one synchronously...");
+        return loadMovie(movieFilePath, mode);
+    }
+    
 	if(mode != OF_QTKIT_DECODE_PIXELS_ONLY && mode != OF_QTKIT_DECODE_TEXTURE_ONLY && mode != OF_QTKIT_DECODE_PIXELS_AND_TEXTURE){
 		ofLogError("ofQTKitPlayer") << "Invalid ofQTKitDecodeMode mode specified while loading movie.";
 		return false;
@@ -133,7 +140,8 @@ bool ofQTKitPlayer::loadMovieAsync(string movieFilePath, ofQTKitDecodeMode mode)
 	moviePlayer = [[QTKitMovieRenderer alloc] init];
     
     // SK: Everything below needs to be done async/with a callback
-    //NSLog(@"Loading Movie");
+    //     but first we need to detach the movie from this thread with prepareForLoadAsync
+
     [moviePlayer prepareForLoadAsync];
     
     bInitialized = false;
@@ -146,6 +154,19 @@ bool ofQTKitPlayer::loadMovieAsync(string movieFilePath, ofQTKitDecodeMode mode)
                                  allowTexture:useTexture
                                   allowPixels:usePixels
                                    allowAlpha:useAlpha];
+        
+        if(!success && moviePlayer.mustLoadSync) {
+            NSLog(@"Ok not gonna load async again");
+            bMustLoadSync = true;   // Don't try to load asynchronously again
+            /*
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSLog(@"Loading synchronously...");
+                // Try to load synchronously
+                loadMovie(movieFilePath, mode);
+            });
+            */
+            //moviePlayer = nil;
+        }
         
         //if(success) NSLog(@"Movie Loaded");
         /*
@@ -194,7 +215,7 @@ bool ofQTKitPlayer::isLoading() {
     return [moviePlayer isLoading];
 }
 bool ofQTKitPlayer::errorLoading() {
-    return [moviePlayer errorLoading];
+    return moviePlayer == nil || [moviePlayer errorLoading];
 }
 
 //--------------------------------------------------------------------
@@ -315,7 +336,7 @@ void ofQTKitPlayer::update() {
     
     if(bInitialized) {
         // SK: Manually loop if the loop state couldn't be set for some reason (async loading)
-        if(currentLoopState == OF_LOOP_NORMAL && currentLoopState != getLoopState() && [moviePlayer frame] >= [moviePlayer frameCount]) {
+        if(currentLoopState == OF_LOOP_NORMAL && currentLoopState != getLoopState() && [moviePlayer frame] >= [moviePlayer frameCount] && [moviePlayer frameCount] > 1) {
             firstFrame();
         }
         bNewFrame = [moviePlayer update];
@@ -340,7 +361,7 @@ void ofQTKitPlayer::update() {
         
         bInitialized = true;
         
-        //NSLog(@"Textures allocated");
+        NSLog(@"Textures allocated");
     }
 
     [pool release];
@@ -610,5 +631,8 @@ void ofQTKitPlayer::updateTexture(){
 		data.tex_t = getWidth();
 		data.tex_u = getHeight();
 	}
+    else {
+        cout << "Texture not allocated for " << moviePath << endl;
+    }
 }
 

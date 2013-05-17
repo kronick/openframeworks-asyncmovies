@@ -124,6 +124,8 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
     
         ofEvent<ofVideoReadyEventArgs> videoReadyEvent;
 
+        bool bMustLoadSync;
+    
 	protected:
     
         ofLoopType currentLoopState;
@@ -141,6 +143,7 @@ class ofQTKitPlayer  : public ofBaseVideoPlayer {
 		
         bool bSynchronousSeek;
     
+
         bool bInitialized;
     
 		
